@@ -197,6 +197,207 @@ Based on analysis, potential areas for new features:
 7. Multi-device test orchestration
 8. Improved iOS support features
 
+## AI Testing Integration Guide
+
+### Adding AI Testing Tab to Device Control
+
+The device control interface uses a modular tab system that makes adding new features straightforward. To add an AI testing tab:
+
+#### 1. Create Route Path
+Add to `/ui/src/constants/route-paths.ts`:
+```typescript
+export const getControlAITestingRoute = (serial: string) => `/control/${serial}/ai-testing` as const
+```
+
+#### 2. Create AI Testing Tab Component
+Create `/ui/src/components/views/control-page/tabs/ai-testing-tab/ai-testing-tab.tsx`:
+```typescript
+import { observer } from 'mobx-react-lite'
+import { useDeviceContainer } from '@/hooks/use-device-container'
+import { AITestingStore } from '@/stores/ai-testing-store'
+import { AIChat } from '@/components/ui/ai-chat'
+
+export const AITestingTab = observer(() => {
+  const { serial } = useDeviceSerial()
+  const aiTestingStore = useDeviceContainer(serial).resolve(AITestingStore)
+  
+  return (
+    <div className={styles.container}>
+      <AIChat store={aiTestingStore} />
+    </div>
+  )
+})
+```
+
+#### 3. Add Tab to Device Control Panel
+Update `/ui/src/components/ui/device-control-panel/device-control-panel.tsx`:
+```typescript
+{
+  id: getControlAITestingRoute(serial),
+  title: t('AI Testing'),
+  before: <Icon20RobotOutline height={17} width={17} />,
+  ariaControls: 'tab-content-ai-testing',
+  content: <AITestingTab />,
+}
+```
+
+#### 4. Add Route Configuration
+Update `/ui/src/components/app-router.tsx`:
+```typescript
+<Route element={<ControlPage />} path='ai-testing' />
+```
+
+### AI Provider Architecture
+
+#### 1. AI Provider Service
+Create `/ui/src/services/ai-provider-service/ai-provider-service.ts`:
+```typescript
+@injectable()
+export class AIProviderService {
+  constructor(
+    @inject(TYPES.ConfigStore) private configStore: ConfigStore
+  ) {}
+  
+  async sendMessage(message: string, screenshot?: Blob): Promise<AIResponse> {
+    const provider = this.configStore.aiProvider
+    const apiKey = this.configStore.aiApiKey
+    
+    // Route to appropriate provider
+    switch (provider) {
+      case 'openai':
+        return this.sendToOpenAI(message, screenshot, apiKey)
+      case 'anthropic':
+        return this.sendToAnthropic(message, screenshot, apiKey)
+      // Add more providers
+    }
+  }
+}
+```
+
+#### 2. AI Testing Store
+Create `/ui/src/stores/ai-testing-store.ts`:
+```typescript
+@injectable()
+export class AITestingStore {
+  @observable messages: AIMessage[] = []
+  @observable isProcessing = false
+  
+  constructor(
+    @inject(TYPES.DeviceControlStore) private deviceControl: DeviceControlStore,
+    @inject(TYPES.AIProviderService) private aiProvider: AIProviderService
+  ) {}
+  
+  @action
+  async sendMessage(content: string) {
+    // Add user message
+    this.messages.push({ role: 'user', content })
+    
+    // Capture screenshot
+    const screenshot = await this.deviceControl.captureScreenshot()
+    
+    // Send to AI
+    this.isProcessing = true
+    const response = await this.aiProvider.sendMessage(content, screenshot)
+    
+    // Process AI response and execute commands
+    await this.processAIResponse(response)
+    this.isProcessing = false
+  }
+  
+  private async processAIResponse(response: AIResponse) {
+    // Parse commands from AI response
+    const commands = this.parseCommands(response.content)
+    
+    // Execute each command
+    for (const command of commands) {
+      await this.executeCommand(command)
+    }
+  }
+}
+```
+
+### Adding AI Provider Settings
+
+#### 1. Update Settings Schema
+Add to `/ui/src/types/settings.ts`:
+```typescript
+interface Settings {
+  // ... existing settings
+  aiProvider?: 'openai' | 'anthropic' | 'gemini'
+  aiApiKey?: string
+  aiModel?: string
+  aiSystemPrompt?: string
+}
+```
+
+#### 2. Create AI Settings Component
+Create `/ui/src/components/views/settings/ai-settings/ai-settings.tsx`:
+```typescript
+export const AISettings = observer(() => {
+  const settingsStore = useInjection(TYPES.SettingsStore)
+  
+  return (
+    <FormItem top="AI Provider">
+      <Select
+        value={settingsStore.aiProvider}
+        onChange={(e) => settingsStore.setAIProvider(e.target.value)}
+      >
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="gemini">Google Gemini</option>
+      </Select>
+      
+      <FormItem top="API Key">
+        <Input
+          type="password"
+          value={settingsStore.aiApiKey}
+          onChange={(e) => settingsStore.setAIApiKey(e.target.value)}
+        />
+      </FormItem>
+      
+      <FormItem top="System Prompt">
+        <Textarea
+          value={settingsStore.aiSystemPrompt}
+          onChange={(e) => settingsStore.setSystemPrompt(e.target.value)}
+          placeholder="You are an AI assistant helping test mobile applications..."
+        />
+      </FormItem>
+    </FormItem>
+  )
+})
+```
+
+#### 3. WebSocket Integration
+Add AI message types to `/lib/wire/wire.proto`:
+```protobuf
+message AITestingRequest {
+  required string message = 1;
+  optional bytes screenshot = 2;
+}
+
+message AITestingResponse {
+  required string content = 1;
+  repeated DeviceCommand commands = 2;
+}
+```
+
+### Implementation Considerations
+
+1. **Security**: Store API keys securely, consider backend storage for production
+2. **Rate Limiting**: Implement rate limiting for AI API calls
+3. **Error Handling**: Graceful degradation when AI services are unavailable
+4. **Command Safety**: Validate AI-suggested commands before execution
+5. **Context Window**: Manage conversation history to stay within token limits
+6. **Streaming**: Implement streaming responses for better UX
+7. **Multi-modal**: Support image analysis for visual testing scenarios
+
+### Backend Integration Points
+
+1. **New API Endpoints**: `/api/v1/ai-testing/*`
+2. **WebSocket Messages**: Handle `ai.testing.*` message namespace
+3. **Storage**: Store AI conversation history and test results
+4. **Permissions**: Add AI testing permissions to group management
+
 ## Important Links
 
 - GitHub: https://github.com/VKCOM/devicehub
